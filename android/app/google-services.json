@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "68953874450",
+    "project_id": "memessengzroute",
+    "storage_bucket": "memessengzroute.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:68953874450:android:b524543955e4a8ac3ff8cb",
+        "android_client_info": {
+          "package_name": "com.messengzroute.my_chat_zroute"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyChS4QLZQZQPBTl5Bk27Xx7bDOYRmCwZis"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
