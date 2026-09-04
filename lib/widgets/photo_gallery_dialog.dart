@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:flutter/services.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -186,7 +188,27 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
     super.initState();
 
+    // Скрываем системную нижнюю навигационную панель для полноэкранного просмотра
+
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
     _ensureAvatarInAlbum();
+
+  }
+
+
+
+  @override
+
+  void dispose() {
+
+    // Возвращаем системные панели на место при выходе из галереи
+
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    _pageController.dispose();
+
+    super.dispose();
 
   }
 
@@ -240,11 +262,15 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
     if (currentPhotoCount >= 10) {
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
 
-        const SnackBar(content: Text('В альбоме может быть максимум 10 фотографий!')),
+        ScaffoldMessenger.of(context).showSnackBar(
 
-      );
+          const SnackBar(content: Text('В альбоме может быть максимум 10 фотографий!')),
+
+        );
+
+      }
 
       return;
 
@@ -289,6 +315,8 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
       final downloadUrl = storage.getPublicUrl(path);
 
 
+
+      // Добавляем новое фото в подколлекцию album
 
       await FirebaseFirestore.instance
 
@@ -506,17 +534,37 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
           if (isMe)
 
-            IconButton(
+            StreamBuilder<QuerySnapshot>(
 
-              icon: _isUploading
+              stream: FirebaseFirestore.instance
 
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  .collection('users')
 
-                  : const Icon(Icons.add_a_photo, color: Colors.white),
+                  .doc(widget.userId)
 
-              tooltip: 'Добавить фото (макс. 10)',
+                  .collection('album')
 
-              onPressed: _isUploading ? null : () => _uploadNewPhoto(10),
+                  .snapshots(),
+
+              builder: (context, snapshot) {
+
+                final currentCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
+
+                return IconButton(
+
+                  icon: _isUploading
+
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+
+                      : const Icon(Icons.add_a_photo, color: Colors.white),
+
+                  tooltip: 'Добавить фото (макс. 10)',
+
+                  onPressed: _isUploading ? null : () => _uploadNewPhoto(currentCount),
+
+                );
+
+              },
 
             ),
 
@@ -698,7 +746,7 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
-              // Нижняя панель: лайки (1 пользователь 1 лайк) и комментарии
+              // Нижняя панель: лайки и комментарии
 
               Positioned(
 
@@ -726,7 +774,9 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
                     builder: (context) {
 
-                      final currentPhoto = photos[_currentIndex.clamp(0, photos.length - 1)];
+                      final safeIndex = _currentIndex.clamp(0, photos.length - 1);
+
+                      final currentPhoto = photos[safeIndex];
 
                       final List<String> likes = List<String>.from(currentPhoto['likes'] ?? []);
 
@@ -758,7 +808,7 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
                           Text(
 
-                            '${_currentIndex + 1}/${photos.length}',
+                            '${safeIndex + 1}/${photos.length}',
 
                             style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13),
 
@@ -768,7 +818,7 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
-                          // Кнопка Лайк (1 человек = 1 лайк)
+                          // Кнопка Лайк
 
                           IconButton(
 
@@ -818,7 +868,7 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
-                          // Кнопка Удалить фото (для владельца, если это не единственная аватарка)
+                          // Кнопка Удалить фото
 
                           if (isMe && !isMainAvatar) ...[
 
