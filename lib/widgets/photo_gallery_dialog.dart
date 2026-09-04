@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
@@ -182,17 +184,23 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
+  StreamSubscription<QuerySnapshot>? _albumSubscription;
+
+  List<Map<String, dynamic>> _photos = [];
+
+  bool _isLoading = true;
+
+
+
   @override
 
   void initState() {
 
     super.initState();
 
-    // Скрываем системную нижнюю навигационную панель для полноэкранного просмотра
-
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
-    _ensureAvatarInAlbum();
+    _initAlbumStream();
 
   }
 
@@ -202,9 +210,9 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
   void dispose() {
 
-    // Возвращаем системные панели на место при выходе из галереи
-
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    _albumSubscription?.cancel();
 
     _pageController.dispose();
 
@@ -214,15 +222,9 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
-  // Гарантируем, что аватарка существует в подколлекции album для лайков и комментов
+  void _initAlbumStream() {
 
-  Future<void> _ensureAvatarInAlbum() async {
-
-    if (widget.initialAvatarUrl == null || widget.initialAvatarUrl!.isEmpty) return;
-
-
-
-    final avatarDocRef = FirebaseFirestore.instance
+    _albumSubscription = FirebaseFirestore.instance
 
         .collection('users')
 
@@ -230,37 +232,59 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
         .collection('album')
 
-        .doc('main_avatar');
+        .orderBy('createdAt', descending: true)
+
+        .snapshots()
+
+        .listen((snapshot) {
+
+      if (!mounted) return;
 
 
 
-    final doc = await avatarDocRef.get();
+      List<Map<String, dynamic>> loadedPhotos = [];
 
-    if (!doc.exists) {
+      if (snapshot.docs.isNotEmpty) {
 
-      await avatarDocRef.set({
+        loadedPhotos = snapshot.docs.map((doc) {
 
-        'url': widget.initialAvatarUrl,
+          final data = doc.data();
 
-        'createdAt': FieldValue.serverTimestamp(),
+          data['docId'] = doc.id;
 
-        'likes': [],
+          data['ref'] = doc.reference;
 
-        'likesCount': 0,
+          return data;
 
-        'isMainAvatar': true,
+        }).toList();
 
-      }, SetOptions(merge: true));
+      }
 
-    }
+
+
+      setState(() {
+
+        _photos = loadedPhotos;
+
+        _isLoading = false;
+
+        if (_currentIndex >= _photos.length && _photos.isNotEmpty) {
+
+          _currentIndex = _photos.length - 1;
+
+        }
+
+      });
+
+    });
 
   }
 
 
 
-  Future<void> _uploadNewPhoto(int currentPhotoCount) async {
+  Future<void> _uploadNewPhoto() async {
 
-    if (currentPhotoCount >= 10) {
+    if (_photos.length >= 10) {
 
       if (mounted) {
 
@@ -316,17 +340,23 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
 
 
-      // Добавляем новое фото в подколлекцию album
+      final userDocRef = FirebaseFirestore.instance.collection('users').doc(widget.userId);
 
-      await FirebaseFirestore.instance
 
-          .collection('users')
 
-          .doc(widget.userId)
+      // Новое фото сразу становится аватаркой
 
-          .collection('album')
+      await userDocRef.update({
 
-          .add({
+        'avatarUrl': downloadUrl,
+
+      });
+
+
+
+      // Добавляем в альбом (оно первое в списке благодаря descending: true)
+
+      await userDocRef.collection('album').add({
 
         'url': downloadUrl,
 
@@ -336,8 +366,6 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
         'likesCount': 0,
 
-        'isMainAvatar': false,
-
       });
 
 
@@ -346,7 +374,7 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
         ScaffoldMessenger.of(context).showSnackBar(
 
-          const SnackBar(content: Text('Фотография успешно добавлена в альбом!')),
+          const SnackBar(content: Text('Фото загружено и установлено как аватарка!')),
 
         );
 
@@ -410,17 +438,27 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
     if (confirm == true) {
 
-      await FirebaseFirestore.instance
+      final userDocRef = FirebaseFirestore.instance.collection('users').doc(widget.userId);
 
-          .collection('users')
+      await userDocRef.collection('album').doc(photoDocId).delete();
 
-          .doc(widget.userId)
 
-          .collection('album')
 
-          .doc(photoDocId)
+      // Обновляем аватарку на следующее доступное фото в альбоме
 
-          .delete();
+      final remaining = await userDocRef.collection('album').orderBy('createdAt', descending: true).get();
+
+      if (remaining.docs.isNotEmpty) {
+
+        final nextAvatarUrl = remaining.docs.first.data()['url'] ?? '';
+
+        await userDocRef.update({'avatarUrl': nextAvatarUrl});
+
+      } else {
+
+        await userDocRef.update({'avatarUrl': ''});
+
+      }
 
 
 
@@ -534,37 +572,17 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
           if (isMe)
 
-            StreamBuilder<QuerySnapshot>(
+            IconButton(
 
-              stream: FirebaseFirestore.instance
+              icon: _isUploading
 
-                  .collection('users')
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
 
-                  .doc(widget.userId)
+                  : const Icon(Icons.add_a_photo, color: Colors.white),
 
-                  .collection('album')
+              tooltip: 'Добавить фото (макс. 10)',
 
-                  .snapshots(),
-
-              builder: (context, snapshot) {
-
-                final currentCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
-
-                return IconButton(
-
-                  icon: _isUploading
-
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-
-                      : const Icon(Icons.add_a_photo, color: Colors.white),
-
-                  tooltip: 'Добавить фото (макс. 10)',
-
-                  onPressed: _isUploading ? null : () => _uploadNewPhoto(currentCount),
-
-                );
-
-              },
+              onPressed: _isUploading ? null : _uploadNewPhoto,
 
             ),
 
@@ -572,171 +590,219 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
       ),
 
-      body: StreamBuilder<QuerySnapshot>(
+      body: _isLoading
 
-        stream: FirebaseFirestore.instance
+          ? const Center(child: CircularProgressIndicator(color: Colors.white))
 
-            .collection('users')
+          : _photos.isEmpty
 
-            .doc(widget.userId)
+          ? Center(
 
-            .collection('album')
+        child: Column(
 
-            .orderBy('createdAt', descending: false)
+          mainAxisAlignment: MainAxisAlignment.center,
 
-            .snapshots(),
+          children: [
 
-        builder: (context, snapshot) {
+            const Icon(Icons.photo_library_outlined, size: 64, color: Colors.white38),
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
+            const SizedBox(height: 12),
 
-            return const Center(child: CircularProgressIndicator(color: Colors.white));
+            const Text('В альбоме пока нет фотографий', style: TextStyle(color: Colors.white70)),
 
-          }
+            if (isMe) ...[
 
+              const SizedBox(height: 16),
 
+              ElevatedButton.icon(
 
-          List<Map<String, dynamic>> photos = [];
+                onPressed: _uploadNewPhoto,
 
+                icon: const Icon(Icons.add_photo_alternate),
 
-
-          if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-
-            photos = snapshot.data!.docs.map((doc) {
-
-              final data = doc.data() as Map<String, dynamic>;
-
-              data['docId'] = doc.id;
-
-              data['ref'] = doc.reference;
-
-              return data;
-
-            }).toList();
-
-          } else if (widget.initialAvatarUrl != null && widget.initialAvatarUrl!.isNotEmpty) {
-
-            photos = [
-
-              {
-
-                'docId': 'main_avatar',
-
-                'url': widget.initialAvatarUrl!,
-
-                'likes': <String>[],
-
-                'likesCount': 0,
-
-                'isMainAvatar': true,
-
-                'ref': FirebaseFirestore.instance
-
-                    .collection('users')
-
-                    .doc(widget.userId)
-
-                    .collection('album')
-
-                    .doc('main_avatar'),
-
-              }
-
-            ];
-
-          }
-
-
-
-          if (photos.isEmpty) {
-
-            return Center(
-
-              child: Column(
-
-                mainAxisAlignment: MainAxisAlignment.center,
-
-                children: [
-
-                  const Icon(Icons.photo_library_outlined, size: 64, color: Colors.white38),
-
-                  const SizedBox(height: 12),
-
-                  const Text('В альбоме пока нет фотографий', style: TextStyle(color: Colors.white70)),
-
-                  if (isMe) ...[
-
-                    const SizedBox(height: 16),
-
-                    ElevatedButton.icon(
-
-                      onPressed: () => _uploadNewPhoto(0),
-
-                      icon: const Icon(Icons.add_photo_alternate),
-
-                      label: const Text('Загрузить первое фото'),
-
-                    ),
-
-                  ],
-
-                ],
+                label: const Text('Загрузить первое фото'),
 
               ),
 
-            );
+            ],
 
-          }
+          ],
+
+        ),
+
+      )
+
+          : Stack(
+
+        children: [
+
+          PageView.builder(
+
+            controller: _pageController,
+
+            itemCount: _photos.length,
+
+            onPageChanged: (index) => setState(() => _currentIndex = index),
+
+            itemBuilder: (context, index) {
+
+              final photo = _photos[index];
+
+              final url = photo['url'] as String;
 
 
 
-          return Stack(
+              return InteractiveViewer(
 
-            children: [
+                minScale: 0.8,
 
-              PageView.builder(
+                maxScale: 3.5,
 
-                controller: _pageController,
+                child: Center(
 
-                itemCount: photos.length,
+                  child: Image.network(
 
-                onPageChanged: (index) => setState(() => _currentIndex = index),
+                    url,
 
-                itemBuilder: (context, index) {
+                    fit: BoxFit.contain,
 
-                  final photo = photos[index];
+                    loadingBuilder: (_, child, progress) {
 
-                  final url = photo['url'] as String;
+                      if (progress == null) return child;
+
+                      return const Center(child: CircularProgressIndicator(color: Colors.white70));
+
+                    },
+
+                    errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, size: 60, color: Colors.white38),
+
+                  ),
+
+                ),
+
+              );
+
+            },
+
+          ),
 
 
 
-                  return InteractiveViewer(
+          Positioned(
 
-                    minScale: 0.8,
+            bottom: 24,
 
-                    maxScale: 3.5,
+            left: 16,
 
-                    child: Center(
+            right: 16,
 
-                      child: Image.network(
+            child: Container(
 
-                        url,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
 
-                        fit: BoxFit.contain,
+              decoration: BoxDecoration(
 
-                        loadingBuilder: (_, child, progress) {
+                color: Colors.black.withOpacity(0.75),
 
-                          if (progress == null) return child;
+                borderRadius: BorderRadius.circular(30),
 
-                          return const Center(child: CircularProgressIndicator(color: Colors.white70));
+                border: Border.all(color: Colors.white24),
 
-                        },
+              ),
 
-                        errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, size: 60, color: Colors.white38),
+              child: Builder(
+
+                builder: (context) {
+
+                  final safeIndex = _currentIndex.clamp(0, _photos.length - 1);
+
+                  final currentPhoto = _photos[safeIndex];
+
+                  final List<String> likes = List<String>.from(currentPhoto['likes'] ?? []);
+
+                  final int likesCount = currentPhoto['likesCount'] ?? likes.length;
+
+                  final bool isLikedByMe = currentUserId != null && likes.contains(currentUserId);
+
+                  final String docId = currentPhoto['docId'] ?? '';
+
+                  final DocumentReference? ref = currentPhoto['ref'];
+
+
+
+                  return Row(
+
+                    children: [
+
+                      Text(
+
+                        '${safeIndex + 1}/${_photos.length}',
+
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13),
 
                       ),
 
-                    ),
+                      const Spacer(),
+
+
+
+                      IconButton(
+
+                        icon: Icon(
+
+                          isLikedByMe ? Icons.favorite : Icons.favorite_border,
+
+                          color: isLikedByMe ? Colors.redAccent : Colors.white,
+
+                          size: 26,
+
+                        ),
+
+                        onPressed: () {
+
+                          if (ref != null) _togglePhotoLike(ref, likes);
+
+                        },
+
+                      ),
+
+                      Text(
+
+                        '$likesCount',
+
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+
+                      ),
+
+                      const SizedBox(width: 14),
+
+
+
+                      IconButton(
+
+                        icon: const Icon(Icons.mode_comment_outlined, color: Colors.white, size: 24),
+
+                        onPressed: () => _openCommentsSheet(docId),
+
+                      ),
+
+
+
+                      if (isMe) ...[
+
+                        const SizedBox(width: 6),
+
+                        IconButton(
+
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 24),
+
+                          onPressed: () => _deletePhoto(docId),
+
+                        ),
+
+                      ],
+
+                    ],
 
                   );
 
@@ -744,165 +810,11 @@ class _PhotoGalleryDialogState extends State<PhotoGalleryDialog> {
 
               ),
 
+            ),
 
+          ),
 
-              // Нижняя панель: лайки и комментарии
-
-              Positioned(
-
-                bottom: 24,
-
-                left: 16,
-
-                right: 16,
-
-                child: Container(
-
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-
-                  decoration: BoxDecoration(
-
-                    color: Colors.black.withOpacity(0.75),
-
-                    borderRadius: BorderRadius.circular(30),
-
-                    border: Border.all(color: Colors.white24),
-
-                  ),
-
-                  child: Builder(
-
-                    builder: (context) {
-
-                      final safeIndex = _currentIndex.clamp(0, photos.length - 1);
-
-                      final currentPhoto = photos[safeIndex];
-
-                      final List<String> likes = List<String>.from(currentPhoto['likes'] ?? []);
-
-                      final int likesCount = currentPhoto['likesCount'] ?? likes.length;
-
-                      final bool isLikedByMe = currentUserId != null && likes.contains(currentUserId);
-
-                      final String docId = currentPhoto['docId'] ?? 'main_avatar';
-
-                      final bool isMainAvatar = currentPhoto['isMainAvatar'] == true;
-
-                      final DocumentReference? ref = currentPhoto['ref'] ??
-
-                          FirebaseFirestore.instance
-
-                              .collection('users')
-
-                              .doc(widget.userId)
-
-                              .collection('album')
-
-                              .doc(docId);
-
-
-
-                      return Row(
-
-                        children: [
-
-                          Text(
-
-                            '${safeIndex + 1}/${photos.length}',
-
-                            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13),
-
-                          ),
-
-                          const Spacer(),
-
-
-
-                          // Кнопка Лайк
-
-                          IconButton(
-
-                            icon: Icon(
-
-                              isLikedByMe ? Icons.favorite : Icons.favorite_border,
-
-                              color: isLikedByMe ? Colors.redAccent : Colors.white,
-
-                              size: 26,
-
-                            ),
-
-                            tooltip: isLikedByMe ? 'Убрать лайк' : 'Поставить лайк',
-
-                            onPressed: () {
-
-                              if (ref != null) _togglePhotoLike(ref, likes);
-
-                            },
-
-                          ),
-
-                          Text(
-
-                            '$likesCount',
-
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-
-                          ),
-
-                          const SizedBox(width: 14),
-
-
-
-                          // Кнопка Комментарии
-
-                          IconButton(
-
-                            icon: const Icon(Icons.mode_comment_outlined, color: Colors.white, size: 24),
-
-                            tooltip: 'Комментарии',
-
-                            onPressed: () => _openCommentsSheet(docId),
-
-                          ),
-
-
-
-                          // Кнопка Удалить фото
-
-                          if (isMe && !isMainAvatar) ...[
-
-                            const SizedBox(width: 6),
-
-                            IconButton(
-
-                              icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 24),
-
-                              tooltip: 'Удалить фото',
-
-                              onPressed: () => _deletePhoto(docId),
-
-                            ),
-
-                          ],
-
-                        ],
-
-                      );
-
-                    },
-
-                  ),
-
-                ),
-
-              ),
-
-            ],
-
-          );
-
-        },
+        ],
 
       ),
 

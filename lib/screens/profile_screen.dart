@@ -138,7 +138,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
 
 
-      // Также обязательно добавляем новую аватарку в подколлекцию альбома, чтобы она отображалась в галерее
+      // Добавляем новое фото в альбом (оно становится новым первым)
 
       await userDocRef.collection('album').add({
 
@@ -149,8 +149,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'likes': [],
 
         'likesCount': 0,
-
-        'isMainAvatar': false,
 
       });
 
@@ -246,7 +244,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
 
 
-      // Находим и удаляем соответствующее фото из подколлекции альбома
+      // Удаляем фото из коллекции album
 
       final albumQuery = await userDocRef
 
@@ -266,7 +264,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
 
 
-      // Получаем оставшиеся фото в альбоме, чтобы назначить следующее как аватарку
+      // Берем оставшееся последнее фото в альбоме как новую аватарку
 
       final remainingAlbum = await userDocRef
 
